@@ -94,6 +94,13 @@ defmodule Swarm.Tracker do
   """
   def remove_meta(key, pid) when is_pid(pid),
     do: GenStateMachine.call(__MODULE__, {:remove_meta, key, pid}, :infinity)
+    
+  @doc """
+  Fore topology change this is useful if your distribution strategy is not based on nodes which means distribution changes 
+  could happen outside net kernel monitor nodes trigger
+  """
+  def fore_topology_change(),
+    do: GenStateMachine.call(__MODULE__, :fore_topology_change, :infinity)
 
   ## Process Internals / Internal API
 
@@ -621,6 +628,11 @@ defmodule Swarm.Tracker do
   def handle_event(:cast, msg, state) do
     handle_cast(msg, state)
   end
+  
+  def handle_event(:info, :fore_topology_change, state) do
+    handle_topology_change({:force, Node.self()}, state)
+  end
+  
   # Default event handler
   def handle_event(event_type, event_data, _state) do
     debug "unexpected event: #{inspect {event_type, event_data}}"
@@ -1000,11 +1012,26 @@ defmodule Swarm.Tracker do
     GenStateMachine.reply(from, :ok)
     {:keep_state, new_state}
   end
+  
+  defp handle_call(:fore_topology_change, from, %TrackerState{nodes: nodes} = state) do
+    GenStateMachine.reply(from, :ok)
+    case :rpc.sbcast(nodes, __MODULE__, :fore_topology_change) do
+      {_good, []} ->
+        :ok
+
+      {_good, bad_nodes} ->
+        warn("broadcast of fore topology change was not recevied by #{inspect(bad_nodes)}")
+        :ok
+    end
+
+    handle_topology_change({:force, Node.self()}, state)
+  end
+  
   defp handle_call(msg, _from, _state) do
     warn "unrecognized call: #{inspect msg}"
     :keep_state_and_data
   end
-
+  
   # This is the handler for local operations on the tracker which are asynchronous
   defp handle_cast({:sync, from, _rclock}, %TrackerState{clock: clock} = state) do
     if ignore_node?(node(from)) do
