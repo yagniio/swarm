@@ -1,11 +1,11 @@
 # Swarm
 
-[![Hex.pm Version](http://img.shields.io/hexpm/v/swarm.svg?style=flat)](https://hex.pm/packages/swarm)
+[![Hex.pm Version](http://img.shields.io/hexpm/v/swarm.svg?style=flat)](https://hex.pm/packages/swarm) [![Build Status](https://travis-ci.com/bitwalker/swarm.svg?branch=master)](https://travis-ci.com/bitwalker/swarm)
 
 **NOTE**: If you are upgrading from 1.0, be aware that the autoclustering functionality has been extracted
 to its own package, which you will need to depend on if you use that feature.
-The package is [libcluster](http://github.com/bitwalker/libcluster) and is available on 
-[Hex](https://hex.pm/packages/libcluster). Please be sure to read over the README to make sure your 
+The package is [libcluster](http://github.com/bitwalker/libcluster) and is available on
+[Hex](https://hex.pm/packages/libcluster). Please be sure to read over the README to make sure your
 config is properly updated.
 
 Swarm is a global distributed registry, offering a feature set similar to that of `gproc`,
@@ -90,7 +90,7 @@ Swarm provides two strategies for you to use:
   separate partitions, it's generally not an issue if those events are for the same device. However
   this is clearly not ideal in all situations. Swarm also aims to be fast, so registrations and
   lookups must be as low latency as possible, even when the number of processes in the registry grows
-  very large. This is acheived without consensus by using a consistent hash of the name which
+  very large. This is achieved without consensus by using a consistent hash of the name which
   deterministically defines which node a process belongs on, and all requests to start a process on
   that node will be serialized through that node to prevent conflicts.
 
@@ -323,6 +323,18 @@ end
 ## License
 
 MIT
+
+## Testing
+
+`mix test` runs a variety of tests, most of them use a cluster of
+Elixir nodes to test the tracker and the registry. If you want more
+verbose output during the tests, run them like this:
+
+    # SWARM_DEBUG=true mix test
+
+This sets the log level to `:debug`, runs ExUnit with `--trace`, and
+enables GenServer tracing on the Tracker processes.
+
 
 ## TODO
 
