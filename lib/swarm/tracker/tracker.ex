@@ -753,6 +753,10 @@ defmodule Swarm.Tracker do
   def handle_event(:info, :cluster_join, _state) do
     :keep_state_and_data
   end
+  
+  def handle_event(:info, :fore_topology_change, state) do
+    handle_topology_change({:force, Node.self()}, state)
+  end
 
   def handle_event({:call, from}, msg, state) do
     handle_call(msg, from, state)
@@ -1191,6 +1195,17 @@ defmodule Swarm.Tracker do
 
     GenStateMachine.reply(from, :finished)
     :keep_state_and_data
+  end
+  defp handle_call(:fore_topology_change, from, %TrackerState{nodes: nodes} = state) do
+     GenStateMachine.reply(from, :ok)
+     case :rpc.sbcast(nodes, __MODULE__, :fore_topology_change) do
+       {_good, []} ->
+         :ok
+        {_good, bad_nodes} ->
+         warn("broadcast of fore topology change was not recevied by #{inspect(bad_nodes)}")
+         :ok
+     end
+      handle_topology_change({:force, Node.self()}, state)
   end
   defp handle_call(msg, _from, _state) do
     warn("unrecognized call: #{inspect(msg)}")
