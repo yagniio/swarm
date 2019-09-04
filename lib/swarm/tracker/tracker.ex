@@ -38,7 +38,8 @@ defmodule Swarm.Tracker do
             self: atom(),
             sync_node: nil | atom(),
             sync_ref: nil | reference(),
-            pending_sync_reqs: [pid()]
+            pending_sync_reqs: [pid()],
+            topology_change_receivers: [pid()]
           }
     defstruct clock: nil,
               nodes: [],
@@ -46,7 +47,8 @@ defmodule Swarm.Tracker do
               self: :nonode@nohost,
               sync_node: nil,
               sync_ref: nil,
-              pending_sync_reqs: []
+              pending_sync_reqs: [],
+              topology_change_receivers: []
   end
 
   # Public API
@@ -104,13 +106,16 @@ defmodule Swarm.Tracker do
   """
   def remove_meta(key, pid) when is_pid(pid),
     do: GenStateMachine.call(__MODULE__, {:remove_meta, key, pid}, :infinity)
-    
+
   @doc """
   Fore topology change this is useful if your distribution strategy is not based on nodes which means distribution changes 
   could happen outside net kernel monitor nodes trigger
   """
   def fore_topology_change(),
     do: GenStateMachine.call(__MODULE__, :fore_topology_change, :infinity)
+
+  def add_topology_change_receiver(pid),
+    do: GenStateMachine.call(__MODULE__, {:add_topology_change_receiver, pid}, :infinity)
 
   ## Process Internals / Internal API
 
@@ -212,6 +217,7 @@ defmodule Swarm.Tracker do
   def cluster_wait(:info, :cluster_join, %TrackerState{nodes: nodes} = state) do
     info("joining cluster..")
     info("found connected nodes: #{inspect(nodes)}")
+
     # Connect to a random node and sync registries,
     # start anti-entropy, and start loop with forked clock of
     # remote node
@@ -230,11 +236,17 @@ defmodule Swarm.Tracker do
     info("syncing with #{sync_node}")
     ref = Process.monitor({__MODULE__, sync_node})
     {lclock, rclock} = Clock.fork(rclock)
-    debug("forking clock: #{inspect state.clock}, lclock: #{inspect lclock}, rclock: #{inspect rclock}")
+
+    debug(
+      "forking clock: #{inspect(state.clock)}, lclock: #{inspect(lclock)}, rclock: #{
+        inspect(rclock)
+      }"
+    )
+
     GenStateMachine.cast(from, {:sync_recv, self(), rclock, get_registry_snapshot()})
 
     {:next_state, :awaiting_sync_ack,
-    %{state | clock: lclock, sync_node: sync_node, sync_ref: ref}}
+     %{state | clock: lclock, sync_node: sync_node, sync_ref: ref}}
   end
 
   def cluster_wait(:cast, {:sync, from, _rclock}, %TrackerState{} = state) do
@@ -306,6 +318,7 @@ defmodule Swarm.Tracker do
             sync_ref: nil
         }
 
+        send_topology_change_to_receivers(new_state)
         {:next_state, :tracking, new_state}
 
       new_nodes ->
@@ -323,6 +336,7 @@ defmodule Swarm.Tracker do
             sync_ref: ref
         }
 
+        send_topology_change_to_receivers(new_state)
         {:keep_state, new_state}
     end
   end
@@ -396,7 +410,13 @@ defmodule Swarm.Tracker do
         # The local clock dominates the remote clock, so the local node will begin the sync
         info("syncing to #{sync_node} based on tracker clock")
         {lclock, rclock} = Clock.fork(state.clock)
-        debug("forking clock when local: #{inspect state.clock}, lclock: #{inspect lclock}, rclock: #{inspect rclock}")
+
+        debug(
+          "forking clock when local: #{inspect(state.clock)}, lclock: #{inspect(lclock)}, rclock: #{
+            inspect(rclock)
+          }"
+        )
+
         GenStateMachine.cast(from, {:sync_recv, self(), rclock, get_registry_snapshot()})
         {:next_state, :awaiting_sync_ack, %{state | clock: lclock}}
 
@@ -409,7 +429,13 @@ defmodule Swarm.Tracker do
         # The local node begins the sync
         info("syncing to #{sync_node} based on node precedence")
         {lclock, rclock} = Clock.fork(state.clock)
-        debug("forking clock when concurrent: #{inspect state.clock}, lclock: #{inspect lclock}, rclock: #{inspect rclock}")
+
+        debug(
+          "forking clock when concurrent: #{inspect(state.clock)}, lclock: #{inspect(lclock)}, rclock: #{
+            inspect(rclock)
+          }"
+        )
+
         GenStateMachine.cast(from, {:sync_recv, self(), rclock, get_registry_snapshot()})
         {:next_state, :awaiting_sync_ack, %{state | clock: lclock}}
     end
@@ -577,7 +603,13 @@ defmodule Swarm.Tracker do
       Enum.member?(state.nodes, pending_node) ->
         info("clearing pending sync request for #{pending_node}")
         {lclock, rclock} = Clock.fork(state.clock)
-        debug("forking clock when resolving: #{inspect state.clock}, lclock: #{inspect lclock}, rclock: #{inspect rclock}")
+
+        debug(
+          "forking clock when resolving: #{inspect(state.clock)}, lclock: #{inspect(lclock)}, rclock: #{
+            inspect(rclock)
+          }"
+        )
+
         ref = Process.monitor(pid)
         GenStateMachine.cast(pid, {:sync_recv, self(), rclock, get_registry_snapshot()})
 
@@ -767,7 +799,7 @@ defmodule Swarm.Tracker do
   def handle_event(:info, :cluster_join, _state) do
     :keep_state_and_data
   end
-  
+
   def handle_event(:info, :fore_topology_change, state) do
     handle_topology_change({:force, Node.self()}, state)
   end
@@ -1187,45 +1219,82 @@ defmodule Swarm.Tracker do
     GenStateMachine.reply(from, :ok)
     {:keep_state, new_state}
   end
+
   defp handle_call({:handoff, worker_name, handoff_state}, from, state) do
     Registry.get_by_name(worker_name)
     |> case do
       :undefined ->
         # Worker was already removed from registry -> do nothing
-        debug "The node #{worker_name} was not found in the registry"
+        debug("The node #{worker_name} was not found in the registry")
+
       entry(name: name, pid: pid, meta: %{mfa: _mfa} = meta) = obj ->
         case Strategy.remove_node(state.strategy, state.self) |> Strategy.key_to_node(name) do
           {:error, {:invalid_ring, :no_nodes}} ->
-            debug "Cannot handoff #{inspect name} because there is no other node left"
+            debug("Cannot handoff #{inspect(name)} because there is no other node left")
+
           other_node ->
-            debug "#{inspect name} has requested to be terminated and resumed on another node"
+            debug("#{inspect(name)} has requested to be terminated and resumed on another node")
             {:ok, state} = remove_registration(obj, state)
             send(pid, {:swarm, :die})
-            debug "sending handoff for #{inspect name} to #{other_node}"
-            GenStateMachine.cast({__MODULE__, other_node},
-                                 {:handoff, self(), {name, meta, handoff_state, Clock.peek(state.clock)}})
+            debug("sending handoff for #{inspect(name)} to #{other_node}")
+
+            GenStateMachine.cast(
+              {__MODULE__, other_node},
+              {:handoff, self(), {name, meta, handoff_state, Clock.peek(state.clock)}}
+            )
         end
     end
 
     GenStateMachine.reply(from, :finished)
     :keep_state_and_data
   end
+
   defp handle_call(:fore_topology_change, from, %TrackerState{nodes: nodes} = state) do
-     GenStateMachine.reply(from, :ok)
-     case :rpc.sbcast(nodes, __MODULE__, :fore_topology_change) do
-       {_good, []} ->
-         :ok
-        {_good, bad_nodes} ->
-         warn("broadcast of fore topology change was not recevied by #{inspect(bad_nodes)}")
-         :ok
-     end
-      handle_topology_change({:force, Node.self()}, state)
+    GenStateMachine.reply(from, :ok)
+
+    case :rpc.sbcast(nodes, __MODULE__, :fore_topology_change) do
+      {_good, []} ->
+        :ok
+
+      {_good, bad_nodes} ->
+        warn("broadcast of fore topology change was not recevied by #{inspect(bad_nodes)}")
+        :ok
+    end
+
+    handle_topology_change({:force, Node.self()}, state)
   end
+
+  defp handle_call({:add_topology_change_receiver, pid}, from, %TrackerState{} = state) do
+    debug("add_topology_change_receivers for #{inspect(pid)}")
+    GenStateMachine.reply(from, :ok)
+    new_state = add_topology_change_receiver(pid, state)
+    {:keep_state, new_state}
+  end
+
   defp handle_call(msg, _from, _state) do
     warn("unrecognized call: #{inspect(msg)}")
     :keep_state_and_data
   end
-  
+
+  def add_topology_change_receiver(pid, %TrackerState{} = state) do
+    %TrackerState{nodes: nodes, strategy: strategy, topology_change_receivers: receivers} = state
+    send_topology_change_to_receiver(pid, nodes, strategy)
+    %TrackerState{state | topology_change_receivers: [pid | receivers]}
+  end
+
+  def send_topology_change_to_receivers(%TrackerState{topology_change_receivers: []}), do: nil
+
+  def send_topology_change_to_receivers(%TrackerState{} = state) do
+    %TrackerState{nodes: nodes, strategy: strategy, topology_change_receivers: receivers} = state
+
+    for pid <- receivers do
+      send_topology_change_to_receiver(pid, nodes, strategy)
+    end
+  end
+
+  def send_topology_change_to_receiver(pid, nodes, strategy),
+    do: Process.send(pid, {:swarm, :topology_change, nodes, strategy}, [])
+
   # This is the handler for local operations on the tracker which are asynchronous
   defp handle_cast({:sync, from, rclock}, %TrackerState{} = state) do
     if ignore_node?(node(from)) do
@@ -1237,8 +1306,7 @@ defmodule Swarm.Tracker do
       ref = Process.monitor(from)
       GenStateMachine.cast(from, {:sync_recv, self(), rclock, get_registry_snapshot()})
 
-      {:next_state, :awaiting_sync_ack,
-       %{state | sync_node: sync_node, sync_ref: ref}}
+      {:next_state, :awaiting_sync_ack, %{state | sync_node: sync_node, sync_ref: ref}}
     end
   end
 
@@ -1633,7 +1701,9 @@ defmodule Swarm.Tracker do
           |> Strategy.add_node(node)
 
         info("node name changed from #{state.self} to #{node}")
-        {:ok, %{state | self: node, strategy: new_strategy}}
+        new_state = %{state | self: node, strategy: new_strategy}
+        send_topology_change_to_receivers(new_state)
+        {:ok, new_state}
 
       Enum.member?(nodes, node) ->
         {:ok, state}
@@ -1666,6 +1736,7 @@ defmodule Swarm.Tracker do
                 strategy: Strategy.add_node(strategy, node)
             }
 
+            send_topology_change_to_receivers(new_state)
             {:ok, new_state, {:topology_change, {:nodeup, node}}}
 
           nil ->
@@ -1718,6 +1789,8 @@ defmodule Swarm.Tracker do
             strategy: strategy,
             pending_sync_reqs: pending_reqs
         }
+
+        send_topology_change_to_receivers(new_state)
 
         {:ok, new_state, {:topology_change, {:nodedown, node}}}
 
