@@ -89,6 +89,22 @@ defmodule Swarm.Distribution.StaticQuorumRing do
     end
   end
 
+  def key_to_hash(%StaticQuorumRing{ring: ring}, key) do
+    HashRing.key_to_hash(ring, key)
+  end
+
+  @doc """
+  Maps a hash to a specific node via the current distribution strategy.
+
+  If the available nodes in the cluster are fewer than the minimum node count it returns `:undefined`.
+  """
+  def hash_to_node(%StaticQuorumRing{static_quorum_size: static_quorum_size, ring: ring}, hash) do
+    case length(ring.nodes) do
+      node_count when node_count < static_quorum_size -> :undefined
+      _ -> HashRing.hash_to_node(ring, hash)
+    end
+  end
+
   defp static_quorum_size() do
     Application.get_env(:swarm, :static_quorum_size, 2)
     |> static_quorum_size()

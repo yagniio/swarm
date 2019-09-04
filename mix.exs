@@ -44,7 +44,7 @@ defmodule Swarm.Mixfile do
       {:dialyxir, "~> 0.3", only: :dev},
       {:benchee, "~> 0.4", only: :dev},
       {:porcelain, "~> 2.0", only: [:dev, :test]},
-      {:libring, "~> 1.0"},
+      {:libring, github: "yagniio/libring"},
       {:gen_state_machine, "~> 2.0"}
     ]
   end

@@ -8,4 +8,6 @@ defmodule Swarm.Distribution.Ring do
   def add_nodes(ring, nodes), do: HashRing.add_nodes(ring, nodes)
   def remove_node(ring, node), do: HashRing.remove_node(ring, node)
   def key_to_node(ring, key), do: HashRing.key_to_node(ring, key)
+  def key_to_hash(ring, key), do: HashRing.key_to_hash(ring, key)
+  def hash_to_node(ring, hash), do: HashRing.hash_to_node(ring, hash)
 end

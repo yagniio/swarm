@@ -26,6 +26,7 @@ defmodule Swarm.Distribution.Strategy do
   @type weight :: pos_integer
   @type nodelist :: [node() | {node(), weight}]
   @type key :: term
+  @type hash :: pos_integer
 
   @type t :: strategy
 
@@ -35,6 +36,8 @@ defmodule Swarm.Distribution.Strategy do
   @callback add_nodes(strategy, nodelist) :: strategy | {:error, reason}
   @callback remove_node(strategy, node) :: strategy | {:error, reason}
   @callback key_to_node(strategy, key) :: node() | :undefined
+  @callback key_to_hash(strategy, key) :: hash
+  @callback hash_to_node(strategy, hash) :: node() | :undefined
 
   def create(), do: strategy_module().create()
   def create(node), do: strategy_module().add_node(create(), node)
@@ -75,6 +78,20 @@ defmodule Swarm.Distribution.Strategy do
   """
   def key_to_node(strategy, node) do
     strategy_module().key_to_node(strategy, node)
+  end
+
+  @doc """
+  Gives you the hash of your key.
+  """
+  def key_to_hash(strategy, key) do
+    strategy_module().key_to_hash(strategy, key)
+  end
+
+  @doc """
+  Maps a hash to a specific node via the current distribution strategy.
+  """
+  def hash_to_node(strategy, hash) do
+    HashRing.hash_to_node(strategy, hash)
   end
 
   defp strategy_module(), do: Application.get_env(:swarm, :distribution_strategy, RingStrategy)
